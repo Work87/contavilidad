@@ -1166,8 +1166,27 @@ function procesarVentaDirecta(vendedor, mensajeVenta, horario, fecha) {
     };
     
     console.log("Nueva venta directa creada:", nuevaVenta); // Verifica los datos antes de agregarlos
+    
+    // Asegurarse de que el array de ventas exista
+    if (!vendedor.ventas) vendedor.ventas = [];
+    
     vendedor.ventas.push(nuevaVenta);
     console.log("Ventas actualizadas del vendedor:", vendedor.ventas); // Verifica que la venta se agregue correctamente
+    
+    // IMPORTANTE: Propagar la venta a los jefes asignados
+    if (vendedor.jefes && vendedor.jefes.length > 0) {
+        vendedor.jefes.forEach(jefeNombre => {
+            const jefe = jefes.find(j => j.nombre === jefeNombre);
+            if (jefe) {
+                // Inicializar ventas si no existe
+                if (!jefe.ventas) jefe.ventas = [];
+                
+                // Agregar una copia de la venta
+                jefe.ventas.push({...nuevaVenta});
+                console.log(`Venta directa propagada al jefe ${jefeNombre}`);
+            }
+        });
+    }
     
     mostrarMensaje(`Total de ${total.toLocaleString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')} registrado correctamente`, 'success');
 }
@@ -1217,6 +1236,74 @@ function procesarVentaNormal(vendedor, mensajeVenta, horario, fechaVenta) {
     }
     
     mostrarMensaje('Venta registrada correctamente', 'success');
+}
+
+/**
+ * Función para reparar ventas que no se propagaron a los jefes
+ * Ejecutar desde la consola con: repararVentasJefes()
+ */
+function repararVentasJefes() {
+    console.log("=== INICIANDO REPARACIÓN DE VENTAS DE JEFES ===");
+    
+    let totalVentasReparadas = 0;
+    let ventasJefesAntes = 0;
+    let ventasJefesDespues = 0;
+    
+    // Contar ventas actuales de jefes
+    jefes.forEach(jefe => {
+        ventasJefesAntes += jefe.ventas?.length || 0;
+    });
+    
+    // Iterar sobre cada vendedor
+    vendedores.forEach(vendedor => {
+        if (!vendedor.jefes || !vendedor.ventas || vendedor.jefes.length === 0) return;
+        
+        // Para cada venta del vendedor
+        vendedor.ventas.forEach(venta => {
+            // Verificar si la venta existe en sus jefes
+            vendedor.jefes.forEach(jefeNombre => {
+                const jefe = jefes.find(j => j.nombre === jefeNombre);
+                if (!jefe || !jefe.ventas) return;
+                
+                // Comprobar si la venta ya existe en el jefe
+                const ventaExisteEnJefe = jefe.ventas.some(ventaJefe => 
+                    ventaJefe.fecha === venta.fecha && 
+                    ventaJefe.horario === venta.horario &&
+                    ventaJefe.totalVenta === venta.totalVenta &&
+                    ventaJefe.premio === venta.premio
+                );
+                
+                // Si no existe, agregarla
+                if (!ventaExisteEnJefe) {
+                    jefe.ventas.push({...venta});
+                    totalVentasReparadas++;
+                    console.log(`Venta reparada: Vendedor=${vendedor.nombre}, Jefe=${jefeNombre}, Fecha=${venta.fecha}, Horario=${venta.horario}`);
+                }
+            });
+        });
+    });
+    
+    // Contar ventas después de la reparación
+    jefes.forEach(jefe => {
+        ventasJefesDespues += jefe.ventas?.length || 0;
+    });
+    
+    console.log(`=== REPARACIÓN COMPLETADA ===`);
+    console.log(`- Ventas de jefes antes: ${ventasJefesAntes}`);
+    console.log(`- Ventas de jefes después: ${ventasJefesDespues}`);
+    console.log(`- Total ventas reparadas: ${totalVentasReparadas}`);
+    
+    // Guardar los cambios si hay reparaciones
+    if (totalVentasReparadas > 0 && typeof guardarDatos === 'function') {
+        guardarDatos();
+        console.log("Cambios guardados correctamente");
+    }
+    
+    return {
+        totalVentasReparadas,
+        ventasJefesAntes,
+        ventasJefesDespues
+    };
 }
 
 //Lineas fijas al reves y normales
@@ -9216,13 +9303,14 @@ class Calculadora {
         const vendedorSelect = document.getElementById('vendedorSelect');
         const horarioSelect = document.getElementById('horarioSelect');
         const numeroGanadorInput = document.getElementById('numeroGanador');
+        const fechaVentaInput = document.getElementById('fechaVenta');
         
         // Obtener vendedor seleccionado
         const vendedorId = vendedorSelect.value;
         const vendedor = window.vendedores ? window.vendedores[vendedorId] : null;
         
         if (!vendedor) {
-            this.mostrarMensajeExterno(CONFIG.MENSAJES.SELECCIONAR_VENDEDOR, 'error');
+            this.mostrarMensajeExterno("Debe seleccionar un vendedor", 'error');
             return;
         }
         
@@ -9230,16 +9318,55 @@ class Calculadora {
         const horario = horarioSelect.value;
         const numeroGanador = parseInt(numeroGanadorInput.value);
         
-        // Registrar la venta
-        // En la función transferirVenta()
-        // Registrar la venta
-        const fechaVentaInput = document.getElementById('fechaVenta');
+        // Obtener fecha formateada
         const fechaActual = window.obtenerFechaFormateada ? window.obtenerFechaFormateada() : new Date().toISOString();
-        const fechaVenta = fechaVentaInput?.value || fechaActual; // Usar fecha seleccionada o actual como respaldo
-
-        // Y luego usar fechaVenta en lugar de fechaActual al crear el objeto de venta
+        const fechaVenta = fechaVentaInput?.value || fechaActual;
+        const fechaFormateada = window.obtenerFechaFormateada ? window.obtenerFechaFormateada(fechaVenta) : fechaVenta;
+        
+        console.log("Excel: Registrando venta con:", {
+            fecha: fechaFormateada,
+            horario,
+            totalVenta,
+            premio: totalPremio,
+            numeroGanador
+        });
+        
+        // USAR EL MISMO MÉTODO QUE EL BOTÓN AGREGAR
+        // En lugar de crear manualmente el objeto de venta, usar procesarVentaDirecta
+        if (window.procesarVentaDirecta) {
+            try {
+                // Crear un mensaje de tipo TOTAL: que procesarVentaDirecta pueda entender
+                const mensajeVenta = `TOTAL: ${totalVenta}`;
+                
+                window.procesarVentaDirecta(
+                    vendedor,
+                    mensajeVenta,
+                    horario,
+                    fechaVenta // Pasar la fecha como está para que procesarVentaDirecta la normalice
+                );
+                
+                // Mostrar mensaje de éxito
+                this.mostrarMensajeExterno(`Venta registrada para ${vendedor.nombre}`, 'success');
+                
+                // Cerrar calculadora
+                this.cerrar();
+                
+                // Actualizar lista de vendedores si existe la función
+                if (window.actualizarListaVendedores) {
+                    window.actualizarListaVendedores();
+                }
+                
+                return;
+            } catch (error) {
+                console.error("Error al usar procesarVentaDirecta:", error);
+                // Si falla, continuar con el método alternativo
+            }
+        }
+        
+        // Método alternativo (código original) por si falla el método principal
+        // Esto garantiza que la funcionalidad siga funcionando
         const venta = {
-            fecha: fechaVenta,
+            fecha: fechaFormateada, // Usa la fecha normalizada
             horario: horario,
             totalVenta: totalVenta,
             premio: totalPremio,
@@ -9251,8 +9378,30 @@ class Calculadora {
         if (!vendedor.ventas) vendedor.ventas = [];
         vendedor.ventas.push(venta);
         
+        // IMPORTANTE: Propagar la venta a los jefes asignados
+        if (vendedor.jefes && vendedor.jefes.length > 0) {
+            vendedor.jefes.forEach(jefeNombre => {
+                // Buscar el jefe por nombre en el array global de jefes
+                const jefe = window.jefes ? window.jefes.find(j => j.nombre === jefeNombre) : null;
+                
+                if (jefe) {
+                    // Inicializar el array de ventas si no existe
+                    if (!jefe.ventas) jefe.ventas = [];
+                    
+                    // Agregar una COPIA de la venta para evitar referencias cruzadas
+                    jefe.ventas.push({...venta});
+                    console.log(`Excel: Venta propagada al jefe ${jefeNombre}`);
+                }
+            });
+        }
+        
+        // Guardar datos si existe la función
+        if (window.guardarDatos) {
+            window.guardarDatos();
+        }
+        
         // Mostrar mensaje de éxito
-        this.mostrarMensajeExterno(`${CONFIG.MENSAJES.VENTA_REGISTRADA} ${vendedor.nombre}`, 'success');
+        this.mostrarMensajeExterno(`Venta registrada para ${vendedor.nombre}`, 'success');
         
         // Cerrar calculadora
         this.cerrar();
